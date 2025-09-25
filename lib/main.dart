@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:id_token_generator/firebase_options.dart';
 import 'package:url_strategy/url_strategy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -661,6 +662,8 @@ class _HomePageState extends State<HomePage> {
                         ),
                         const SizedBox(height: 12),
                         const _NoticeCard(),
+                        const SizedBox(height: 12),
+                        const _AuthorCard(),
                       ],
                     ],
                   ),
@@ -772,6 +775,78 @@ class _NoticeCard extends StatelessWidget {
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AuthorCard extends StatelessWidget {
+  const _AuthorCard();
+
+  Future<void> _openUrl(String url) async {
+    final Uri uri = Uri.parse(url);
+    if (!await launchUrl(
+      uri,
+      mode: LaunchMode.platformDefault,
+      webOnlyWindowName: '_blank',
+    )) {
+      throw 'Could not launch $url';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.person_pin_rounded, color: theme.colorScheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Created by Imran Tangim',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            _openUrl('https://github.com/imtangim'),
+                        icon: const Icon(Icons.link_rounded),
+                        label: const Text('GitHub Profile'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _openUrl(
+                          'https://github.com/imtangim/google-id-token-generator',
+                        ),
+                        icon: const Icon(Icons.code_rounded),
+                        label: const Text('Source Code'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _openUrl(
+                          'https://imtangim.github.io/google-id-token-generator/',
+                        ),
+                        icon: const Icon(Icons.public_rounded),
+                        label: const Text('Live Site'),
+                      ),
+                    ],
                   ),
                 ],
               ),
