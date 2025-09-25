@@ -1,4 +1,5 @@
 import 'dart:developer';
+import 'dart:convert';
 import 'dart:async';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -144,7 +145,8 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  FirebaseAuth _auth = FirebaseAuth.instance;
+  bool _hasCustomConfig = false;
 
   String? _googleIdToken;
   String? _firebaseIdToken;
@@ -154,26 +156,12 @@ class _HomePageState extends State<HomePage> {
   static const String _kPrefGoogleIdToken = 'google_id_token';
   static const String _kPrefFirebaseIdToken = 'firebase_id_token';
   static const String _kPrefTokenUpdatedAtMs = 'tokens_updated_at_ms';
+  static const String _kPrefFirebaseWebConfig = 'firebase_web_config_json';
 
   @override
   void initState() {
     super.initState();
-    _authSubscription = _auth.userChanges().listen((user) async {
-      if (!mounted) return;
-      if (user == null) {
-        // Clear any UI tokens when signed out
-        setState(() {
-          _googleIdToken = null;
-          _firebaseIdToken = null;
-        });
-        await _clearPersistedTokens();
-        return;
-      }
-      // On sign-in or page reload with persisted Firebase session, try rehydrate tokens
-      await _rehydrateTokensIfPossible(user);
-      if (!mounted) return;
-      setState(() {});
-    });
+    unawaited(_initAuthAndSubscribe());
   }
 
   // Redirect flow removed; popup-based auth is used with web persistence.
@@ -182,6 +170,162 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _authSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _initAuthAndSubscribe() async {
+    final FirebaseOptions? custom = await _loadSavedFirebaseOptions();
+    if (custom != null) {
+      _hasCustomConfig = true;
+      await _switchToOptions(custom, subscribe: true);
+    } else {
+      _hasCustomConfig = false;
+      _auth = FirebaseAuth.instance;
+      if (kIsWeb) {
+        try {
+          await _auth.setPersistence(Persistence.LOCAL);
+        } catch (_) {}
+      }
+      _authSubscription = _auth.userChanges().listen((user) async {
+        if (!mounted) return;
+        if (user == null) {
+          setState(() {
+            _googleIdToken = null;
+            _firebaseIdToken = null;
+          });
+          await _clearPersistedTokens();
+          return;
+        }
+        await _rehydrateTokensIfPossible(user);
+        if (!mounted) return;
+        setState(() {});
+      });
+    }
+  }
+
+  Future<FirebaseOptions?> _loadSavedFirebaseOptions() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? raw = prefs.getString(_kPrefFirebaseWebConfig);
+      if (raw == null || raw.trim().isEmpty) return null;
+      return _parseOptionsFromConfigString(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  FirebaseOptions? _parseOptionsFromConfigString(String raw) {
+    // Accept either pure JSON { ... } or JS snippet like: const firebaseConfig = { ... };
+    String jsonPart = raw.trim();
+    final int firstBrace = jsonPart.indexOf('{');
+    final int lastBrace = jsonPart.lastIndexOf('}');
+    if (firstBrace != -1 && lastBrace != -1 && lastBrace > firstBrace) {
+      jsonPart = jsonPart.substring(firstBrace, lastBrace + 1);
+    }
+    Map<String, dynamic> map;
+    try {
+      map = json.decode(jsonPart) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+    String? apiKey = map['apiKey'] as String?;
+    String? appId = map['appId'] as String?;
+    String? messagingSenderId = map['messagingSenderId']?.toString();
+    String? projectId = map['projectId'] as String?;
+    String? authDomain = map['authDomain'] as String?;
+    String? storageBucket = map['storageBucket'] as String?;
+    String? measurementId = map['measurementId'] as String?;
+    if ([
+      apiKey,
+      appId,
+      messagingSenderId,
+      projectId,
+    ].any((e) => e == null || e.isEmpty)) {
+      return null;
+    }
+    return FirebaseOptions(
+      apiKey: apiKey!,
+      appId: appId!,
+      messagingSenderId: messagingSenderId!,
+      projectId: projectId!,
+      authDomain: authDomain,
+      storageBucket: storageBucket,
+      measurementId: measurementId,
+    );
+  }
+
+  Future<FirebaseApp> _getOrInitApp(
+    String name,
+    FirebaseOptions options,
+  ) async {
+    try {
+      return Firebase.app(name);
+    } catch (_) {
+      return Firebase.initializeApp(name: name, options: options);
+    }
+  }
+
+  Future<void> _switchToOptions(
+    FirebaseOptions options, {
+    bool subscribe = false,
+  }) async {
+    _authSubscription?.cancel();
+    try {
+      await _auth.signOut();
+    } catch (_) {}
+    final FirebaseApp app = await _getOrInitApp('custom', options);
+    _auth = FirebaseAuth.instanceFor(app: app);
+    if (kIsWeb) {
+      try {
+        await _auth.setPersistence(Persistence.LOCAL);
+      } catch (_) {}
+    }
+    _hasCustomConfig = true;
+    if (subscribe) {
+      _authSubscription = _auth.userChanges().listen((user) async {
+        if (!mounted) return;
+        if (user == null) {
+          setState(() {
+            _googleIdToken = null;
+            _firebaseIdToken = null;
+          });
+          await _clearPersistedTokens();
+          return;
+        }
+        await _rehydrateTokensIfPossible(user);
+        if (!mounted) return;
+        setState(() {});
+      });
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _switchToDefault() async {
+    _authSubscription?.cancel();
+    try {
+      await _auth.signOut();
+    } catch (_) {}
+    _auth = FirebaseAuth.instance;
+    if (kIsWeb) {
+      try {
+        await _auth.setPersistence(Persistence.LOCAL);
+      } catch (_) {}
+    }
+    _authSubscription = _auth.userChanges().listen((user) async {
+      if (!mounted) return;
+      if (user == null) {
+        setState(() {
+          _googleIdToken = null;
+          _firebaseIdToken = null;
+        });
+        await _clearPersistedTokens();
+        return;
+      }
+      await _rehydrateTokensIfPossible(user);
+      if (!mounted) return;
+      setState(() {});
+    });
+    _hasCustomConfig = false;
+    if (mounted) setState(() {});
   }
 
   String _userInitials(User user) {
@@ -211,6 +355,14 @@ class _HomePageState extends State<HomePage> {
       _errorMessage = null;
     });
     try {
+      // Ensure developer configured a custom Firebase web app before sign-in
+      final bool isConfigured = await _ensureFirebaseConfigured();
+      if (!isConfigured) {
+        setState(() {
+          _working = false;
+        });
+        return;
+      }
       final googleProvider = GoogleAuthProvider();
       // googleProvider.addScope(
       //   'https://www.googleapis.com/auth/contacts.readonly',
@@ -389,6 +541,43 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
         actions: [
+          if (_hasCustomConfig)
+            IconButton(
+              tooltip: 'Clear configuration',
+              onPressed: _working
+                  ? null
+                  : () async {
+                      final SharedPreferences prefs =
+                          await SharedPreferences.getInstance();
+                      await prefs.remove(_kPrefFirebaseWebConfig);
+                      await _switchToDefault();
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Configuration cleared. Using default.',
+                          ),
+                          behavior: SnackBarBehavior.floating,
+                          showCloseIcon: true,
+                        ),
+                      );
+                    },
+              icon: Row(
+                children: [
+                  const Icon(Icons.delete_forever_rounded),
+                  const Text('Clear configuration'),
+                ],
+              ),
+            ),
+          IconButton(
+            tooltip: 'Firebase settings',
+            onPressed: _working
+                ? null
+                : () async {
+                    await _openSettingsDialog();
+                  },
+            icon: const Icon(Icons.settings_suggest_rounded),
+          ),
           if (user != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8.0),
@@ -675,6 +864,385 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+
+  Future<bool> _openSettingsDialog() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final String existing = prefs.getString(_kPrefFirebaseWebConfig) ?? '';
+    final FirebaseOptions? prefill = existing.isNotEmpty
+        ? _parseOptionsFromConfigString(existing)
+        : null;
+    final TextEditingController apiKeyCtrl = TextEditingController(
+      text: prefill?.apiKey ?? '',
+    );
+    final TextEditingController appIdCtrl = TextEditingController(
+      text: prefill?.appId ?? '',
+    );
+    final TextEditingController projectIdCtrl = TextEditingController(
+      text: prefill?.projectId ?? '',
+    );
+    final TextEditingController senderIdCtrl = TextEditingController(
+      text: prefill?.messagingSenderId ?? '',
+    );
+    final TextEditingController authDomainCtrl = TextEditingController(
+      text: prefill?.authDomain ?? '',
+    );
+    final TextEditingController storageBucketCtrl = TextEditingController(
+      text: prefill?.storageBucket ?? '',
+    );
+    final TextEditingController measurementIdCtrl = TextEditingController(
+      text: prefill?.measurementId ?? '',
+    );
+    String? error;
+    bool applying = false;
+    bool proceed = false;
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            final String currentDomain = Uri.base.host;
+            return AlertDialog(
+              title: const Text('Firebase Web configuration'),
+              content: SizedBox(
+                width: 600,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Enter your Firebase Web app config keys.'),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withOpacity(0.15),
+                        border: Border.all(color: Colors.amber.shade700),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            color: Colors.amber.shade800,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Important: After saving, add your hosting domain to Firebase → Authentication → Settings → Authorized domains. For this site add "imtangim.github.io". For your own fork/custom host, add your domain as well, and add "localhost" for local dev.',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      'Current domain: $currentDomain',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    OutlinedButton.icon(
+                                      onPressed: () =>
+                                          _copyToClipboard(currentDomain),
+                                      icon: const Icon(
+                                        Icons.copy_rounded,
+                                        size: 16,
+                                      ),
+                                      label: const Text('Copy domain'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: apiKeyCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'apiKey *',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: appIdCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'appId *',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: projectIdCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'projectId *',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: senderIdCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'messagingSenderId *',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: authDomainCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'authDomain',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: storageBucketCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'storageBucket',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: measurementIdCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'measurementId',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (error != null) ...[
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          error!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                if ((existing).isNotEmpty)
+                  TextButton.icon(
+                    onPressed: applying
+                        ? null
+                        : () async {
+                            await prefs.remove(_kPrefFirebaseWebConfig);
+                            apiKeyCtrl.clear();
+                            appIdCtrl.clear();
+                            projectIdCtrl.clear();
+                            senderIdCtrl.clear();
+                            authDomainCtrl.clear();
+                            storageBucketCtrl.clear();
+                            measurementIdCtrl.clear();
+                            await _switchToDefault();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Configuration cleared. Using default.',
+                                  ),
+                                  behavior: SnackBarBehavior.floating,
+                                  showCloseIcon: true,
+                                ),
+                              );
+                            }
+                          },
+                    icon: const Icon(Icons.delete_forever_rounded),
+                    label: const Text('Clear configuration'),
+                  ),
+                TextButton(
+                  onPressed: applying
+                      ? null
+                      : () async {
+                          // Use default app
+                          await prefs.remove(_kPrefFirebaseWebConfig);
+                          Navigator.of(context).pop('default');
+                        },
+                  child: const Text('Use default'),
+                ),
+                TextButton(
+                  onPressed: applying
+                      ? null
+                      : () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: applying
+                      ? null
+                      : () async {
+                          setState(() {
+                            applying = true;
+                            error = null;
+                          });
+                          final String apiKey = apiKeyCtrl.text.trim();
+                          final String appId = appIdCtrl.text.trim();
+                          final String projectId = projectIdCtrl.text.trim();
+                          final String senderId = senderIdCtrl.text.trim();
+                          if (apiKey.isEmpty ||
+                              appId.isEmpty ||
+                              projectId.isEmpty ||
+                              senderId.isEmpty) {
+                            setState(() {
+                              applying = false;
+                              error = 'Please fill all required fields (*).';
+                            });
+                            return;
+                          }
+                          final Map<String, dynamic> jsonMap = {
+                            'apiKey': apiKey,
+                            'appId': appId,
+                            'projectId': projectId,
+                            'messagingSenderId': senderId,
+                          };
+                          final String authDomain = authDomainCtrl.text.trim();
+                          final String storageBucket = storageBucketCtrl.text
+                              .trim();
+                          final String measurementId = measurementIdCtrl.text
+                              .trim();
+                          if (authDomain.isNotEmpty) {
+                            jsonMap['authDomain'] = authDomain;
+                          }
+                          if (storageBucket.isNotEmpty) {
+                            jsonMap['storageBucket'] = storageBucket;
+                          }
+                          if (measurementId.isNotEmpty) {
+                            jsonMap['measurementId'] = measurementId;
+                          }
+                          final String normalized = json.encode(jsonMap);
+                          await prefs.setString(
+                            _kPrefFirebaseWebConfig,
+                            normalized,
+                          );
+                          final FirebaseOptions options = FirebaseOptions(
+                            apiKey: apiKey,
+                            appId: appId,
+                            projectId: projectId,
+                            messagingSenderId: senderId,
+                            authDomain: authDomain.isEmpty ? null : authDomain,
+                            storageBucket: storageBucket.isEmpty
+                                ? null
+                                : storageBucket,
+                            measurementId: measurementId.isEmpty
+                                ? null
+                                : measurementId,
+                          );
+                          Navigator.of(context).pop(options);
+                        },
+                  child: const Text('Save & Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).then((result) async {
+      if (result == null) return;
+      if (result == 'default') {
+        await _switchToDefault();
+        if (!mounted) return;
+        setState(() {
+          _errorMessage = null;
+          _googleIdToken = null;
+          _firebaseIdToken = null;
+        });
+        proceed = true;
+        return;
+      }
+      if (result is FirebaseOptions) {
+        await _switchToOptions(result, subscribe: true);
+        if (!mounted) return;
+        setState(() {
+          _errorMessage = null;
+          _googleIdToken = null;
+          _firebaseIdToken = null;
+        });
+        proceed = true;
+      }
+    });
+    return proceed;
+  }
+
+  Future<bool> _ensureFirebaseConfigured() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? raw = prefs.getString(_kPrefFirebaseWebConfig);
+      // If a custom config is present and valid, assume configured
+      if (raw != null && raw.trim().isNotEmpty) {
+        final FirebaseOptions? options = _parseOptionsFromConfigString(raw);
+        if (options != null) {
+          return true;
+        }
+      }
+      // Otherwise ask user to configure now
+      final bool applied = await _openSettingsDialog();
+      return applied;
+    } catch (_) {
+      // If anything goes wrong, require explicit configuration
+      final bool applied = await _openSettingsDialog();
+      return applied;
+    }
+  }
 }
 
 class _TokenCard extends StatelessWidget {
@@ -816,7 +1384,7 @@ class _AuthorCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Created by Imran Tangim',
+                    'Created by Tangim Haque',
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),

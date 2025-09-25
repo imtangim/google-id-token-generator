@@ -6,26 +6,32 @@ Generate Google and Firebase ID tokens in your browser for testing and backend i
 - Source: https://github.com/imtangim/google-id-token-generator
 
 ### Features
+
 - Sign in with Google (Firebase Auth)
 - View and copy Google ID Token and Firebase ID Token
 - Responsive Flutter Web UI
 
 ### Development
+
 ```bash
 flutter pub get
 flutter run -d chrome
 ```
 
 ### Build Web
+
 ```bash
 flutter build web --release --base-href "/google-id-token-generator/" --pwa-strategy=offline-first
 ```
 
 ### Deployment
+
 This repo uses GitHub Actions to build and deploy to GitHub Pages on push to `main`.
 
 ### Author
-Created by [Imran Tangim](https://github.com/imtangim).
+
+Created by [Tangim Haque](https://github.com/imtangim).
+
 # id_token_generator
 
 A new Flutter project.
