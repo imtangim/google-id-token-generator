@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="0; url=./" />
+  <meta name="robots" content="noindex">
+  <title>Page Not Found</title>
+  <script>
+    // SPA redirect for GitHub Pages: if deep link, send back to base with path in hash
+    (function() {
+      var path = window.location.pathname.replace(/\/+$/, '');
+      var base = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '/');
+      var redirectUrl = base + '#!' + path;
+      window.location.replace(redirectUrl);
+    })();
+  </script>
+</head>
+<body>
+  <p>Redirecting…</p>
+</body>
+</html>
+

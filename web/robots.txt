@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://imtangim.github.io/google-id-token-generator/sitemap.xml
+
