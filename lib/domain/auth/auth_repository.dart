@@ -16,6 +16,10 @@ abstract class AuthRepository {
   /// Refresh tokens if possible, keeping the user session.
   Future<void> refreshTokens();
 
+  /// Gets the Firebase ID token expiration time.
+  /// Returns null if user is not authenticated.
+  Future<DateTime?> getFirebaseTokenExpiration();
+
   /// Sign out the current user.
   Future<void> signOut();
 }

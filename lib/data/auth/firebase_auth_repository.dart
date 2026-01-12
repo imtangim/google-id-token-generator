@@ -77,6 +77,19 @@ class FirebaseAuthRepository implements AuthRepository {
     await _clearPersistedTokens();
   }
 
+  /// Gets the Firebase ID token expiration time.
+  /// Returns null if user is not authenticated.
+  Future<DateTime?> getFirebaseTokenExpiration() async {
+    final user = _auth.currentUser;
+    if (user == null) return null;
+    try {
+      final result = await user.getIdTokenResult();
+      return result.expirationTime;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _persistTokens({
     String? googleIdToken,
     String? firebaseIdToken,

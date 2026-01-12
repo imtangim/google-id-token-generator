@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,10 +11,93 @@ import '../../shared/notice_card.dart';
 import '../../shared/author_card.dart';
 import '../../shared/token_card.dart';
 import '../../../core/constants.dart';
+import '../../../core/token_validator.dart';
+import '../../../domain/auth/auth_repository.dart';
 
-class AuthenticatedPage extends StatelessWidget {
+class AuthenticatedPage extends StatefulWidget {
   const AuthenticatedPage({super.key, required this.user});
   final User user;
+
+  @override
+  State<AuthenticatedPage> createState() => _AuthenticatedPageState();
+}
+
+class _AuthenticatedPageState extends State<AuthenticatedPage> {
+  Timer? _tokenCheckTimer;
+  Timer? _uiUpdateTimer;
+  int _tick = 0; // Used to force rebuilds for countdown updates
+  static const Duration _tokenCheckInterval = Duration(minutes: 1);
+  static const Duration _uiUpdateInterval = Duration(seconds: 1); // Update UI every second
+  static const Duration _expiringSoonThreshold = Duration(minutes: 5);
+
+  @override
+  void initState() {
+    super.initState();
+    // Check tokens periodically for auto-refresh
+    _tokenCheckTimer = Timer.periodic(_tokenCheckInterval, (_) {
+      _checkAndRefreshTokensIfNeeded();
+    });
+    // Update UI every second to refresh countdown
+    _uiUpdateTimer = Timer.periodic(_uiUpdateInterval, (_) {
+      if (mounted) {
+        setState(() {
+          _tick++; // Increment to trigger rebuild
+        });
+      }
+    });
+    // Initial check
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAndRefreshTokensIfNeeded();
+    });
+  }
+
+  @override
+  void dispose() {
+    _tokenCheckTimer?.cancel();
+    _uiUpdateTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkAndRefreshTokensIfNeeded() async {
+    if (!mounted) return;
+    final bloc = context.read<AuthBloc>();
+    if (bloc.state.isBusy) return;
+
+    try {
+      final tokens = await _loadTokensWithExpiration(context);
+      
+      // Check if tokens are expired or expiring soon
+      bool needsRefresh = false;
+      
+      if (tokens.googleIdToken != null) {
+        final isExpired = TokenValidator.isExpired(tokens.googleIdToken!);
+        final willExpireSoon = TokenValidator.willExpireWithin(
+          tokens.googleIdToken!,
+          _expiringSoonThreshold,
+        );
+        if (isExpired == true || willExpireSoon) {
+          needsRefresh = true;
+        }
+      }
+      
+      if (tokens.firebaseIdToken != null) {
+        final isExpired = TokenValidator.isExpired(tokens.firebaseIdToken!);
+        final willExpireSoon = TokenValidator.willExpireWithin(
+          tokens.firebaseIdToken!,
+          _expiringSoonThreshold,
+        );
+        if (isExpired == true || willExpireSoon) {
+          needsRefresh = true;
+        }
+      }
+
+      if (needsRefresh && mounted && !bloc.state.isBusy) {
+        bloc.add(const AuthRefreshRequested());
+      }
+    } catch (_) {
+      // Ignore errors in automatic refresh check
+    }
+  }
 
   String _userInitials(User user) {
     final String display = (user.displayName?.trim().isNotEmpty == true)
@@ -38,6 +123,7 @@ class AuthenticatedPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final user = widget.user;
     return LayoutBuilder(
       builder: (context, constraints) {
         final double maxWidth = constraints.maxWidth;
@@ -234,73 +320,30 @@ class AuthenticatedPage extends StatelessWidget {
                           current.tokensRefreshTimestamp ||
                           previous.isBusy != current.isBusy,
                       builder: (context, state) {
-                        return FutureBuilder<_Tokens>(
-                          future: _loadTokens(),
-                          builder: (context, snapshot) {
-                        final _Tokens tokens = snapshot.data ?? const _Tokens();
-                        if (isNarrow) {
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              TokenCard(
-                                title:
-                                    'Google ID Token (from Google credential)',
-                                token: tokens.googleIdToken,
-                                onCopy: () => _copyToClipboard(
-                                  context,
-                                  tokens.googleIdToken,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              TokenCard(
-                                title: 'Firebase ID Token (from Firebase user)',
-                                token: tokens.firebaseIdToken,
-                                onCopy: () => _copyToClipboard(
-                                  context,
-                                  tokens.firebaseIdToken,
-                                ),
-                              ),
-                            ],
-                          );
-                        }
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: TokenCard(
-                                title:
-                                    'Google ID Token (from Google credential)',
-                                token: tokens.googleIdToken,
-                                onCopy: () => _copyToClipboard(
-                                  context,
-                                  tokens.googleIdToken,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: TokenCard(
-                                title: 'Firebase ID Token (from Firebase user)',
-                                token: tokens.firebaseIdToken,
-                                onCopy: () => _copyToClipboard(
-                                  context,
-                                  tokens.firebaseIdToken,
-                                ),
-                              ),
-                            ),
-                          ],
-                        );
-                        },
+                        // Listen to _tick changes to trigger rebuilds for countdown
+                        // _tick is incremented every second via setState to force UI updates
+                        // Using Builder to ensure rebuilds when _tick changes
+                        return Builder(
+                          builder: (context) {
+                            // Reference _tick to ensure rebuilds when it changes
+                            final _ = _tick;
+                            return _buildTokenCards(context, state);
+                          },
                         );
                       },
                     ),
 
                     const SizedBox(height: 12),
-                    Text(
-                      'Note: Google and Firebase ID tokens are different. Use whichever your backend expects.',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+                    Builder(
+                      builder: (context) {
+                        final theme = Theme.of(context);
+                        return Text(
+                          'Note: Google and Firebase ID tokens are different. Use whichever your backend expects.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(height: 20),
                     const NoticeCard(),
@@ -316,15 +359,149 @@ class AuthenticatedPage extends StatelessWidget {
     );
   }
 
-  Future<_Tokens> _loadTokens() async {
+  Widget _buildTokenCards(BuildContext context, AuthState state) {
+    // This method is called every second when _tick changes (via setState)
+    // Access isNarrow from the LayoutBuilder context
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bool isNarrow = constraints.maxWidth < 900;
+        return FutureBuilder<_TokenInfo>(
+          future: _loadTokensWithExpiration(context),
+          builder: (context, snapshot) {
+            final _TokenInfo tokens = snapshot.data ?? const _TokenInfo();
+            
+            // Recalculate time remaining dynamically based on current time
+            // This ensures the countdown updates every second without restarting the future
+            Duration? googleTimeRemaining = tokens.googleExpiration != null
+                ? tokens.googleExpiration!.difference(DateTime.now().toUtc())
+                : null;
+            Duration? firebaseTimeRemaining = tokens.firebaseExpiration != null
+                ? tokens.firebaseExpiration!.difference(DateTime.now().toUtc())
+                : null;
+            
+            if (isNarrow) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TokenCard(
+                    title: 'Google ID Token (from Google credential)',
+                    token: tokens.googleIdToken,
+                    onCopy: () => _copyToClipboard(context, tokens.googleIdToken),
+                    expirationTime: tokens.googleExpiration,
+                    timeRemaining: googleTimeRemaining,
+                    isExpired: tokens.googleExpiration != null
+                        ? googleTimeRemaining?.isNegative ?? false
+                        : null,
+                    isExpiringSoon: googleTimeRemaining != null &&
+                        !googleTimeRemaining.isNegative &&
+                        googleTimeRemaining <= _expiringSoonThreshold,
+                  ),
+                  const SizedBox(height: 12),
+                  TokenCard(
+                    title: 'Firebase ID Token (from Firebase user)',
+                    token: tokens.firebaseIdToken,
+                    onCopy: () => _copyToClipboard(context, tokens.firebaseIdToken),
+                    expirationTime: tokens.firebaseExpiration,
+                    timeRemaining: firebaseTimeRemaining,
+                    isExpired: tokens.firebaseExpiration != null
+                        ? firebaseTimeRemaining?.isNegative ?? false
+                        : null,
+                    isExpiringSoon: firebaseTimeRemaining != null &&
+                        !firebaseTimeRemaining.isNegative &&
+                        firebaseTimeRemaining <= _expiringSoonThreshold,
+                  ),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TokenCard(
+                    title: 'Google ID Token (from Google credential)',
+                    token: tokens.googleIdToken,
+                    onCopy: () => _copyToClipboard(context, tokens.googleIdToken),
+                    expirationTime: tokens.googleExpiration,
+                    timeRemaining: googleTimeRemaining,
+                    isExpired: tokens.googleExpiration != null
+                        ? googleTimeRemaining?.isNegative ?? false
+                        : null,
+                    isExpiringSoon: googleTimeRemaining != null &&
+                        !googleTimeRemaining.isNegative &&
+                        googleTimeRemaining <= _expiringSoonThreshold,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TokenCard(
+                    title: 'Firebase ID Token (from Firebase user)',
+                    token: tokens.firebaseIdToken,
+                    onCopy: () => _copyToClipboard(context, tokens.firebaseIdToken),
+                    expirationTime: tokens.firebaseExpiration,
+                    timeRemaining: firebaseTimeRemaining,
+                    isExpired: tokens.firebaseExpiration != null
+                        ? firebaseTimeRemaining?.isNegative ?? false
+                        : null,
+                    isExpiringSoon: firebaseTimeRemaining != null &&
+                        !firebaseTimeRemaining.isNegative &&
+                        firebaseTimeRemaining <= _expiringSoonThreshold,
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<_TokenInfo> _loadTokensWithExpiration(BuildContext context) async {
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
-      return _Tokens(
-        googleIdToken: prefs.getString(AppPrefsKeys.googleIdToken),
-        firebaseIdToken: prefs.getString(AppPrefsKeys.firebaseIdToken),
+      final googleIdToken = prefs.getString(AppPrefsKeys.googleIdToken);
+      final firebaseIdToken = prefs.getString(AppPrefsKeys.firebaseIdToken);
+
+      // Get expiration info for Google token
+      DateTime? googleExpiration;
+      Duration? googleTimeRemaining;
+      if (googleIdToken != null) {
+        googleExpiration = TokenValidator.getExpirationTime(googleIdToken);
+        googleTimeRemaining = TokenValidator.getTimeUntilExpiration(googleIdToken);
+      }
+
+      // Get expiration info for Firebase token
+      DateTime? firebaseExpiration;
+      Duration? firebaseTimeRemaining;
+      if (firebaseIdToken != null) {
+        // Try to get from Firebase Auth first (more reliable)
+        try {
+          final repository = context.read<AuthRepository>();
+          final firebaseExp = await repository.getFirebaseTokenExpiration();
+          if (firebaseExp != null) {
+            firebaseExpiration = firebaseExp;
+            firebaseTimeRemaining = firebaseExp.difference(DateTime.now().toUtc());
+          } else {
+            // Fallback to JWT decoding
+            firebaseExpiration = TokenValidator.getExpirationTime(firebaseIdToken);
+            firebaseTimeRemaining = TokenValidator.getTimeUntilExpiration(firebaseIdToken);
+          }
+        } catch (_) {
+          // Fallback to JWT decoding
+          firebaseExpiration = TokenValidator.getExpirationTime(firebaseIdToken);
+          firebaseTimeRemaining = TokenValidator.getTimeUntilExpiration(firebaseIdToken);
+        }
+      }
+
+      return _TokenInfo(
+        googleIdToken: googleIdToken,
+        firebaseIdToken: firebaseIdToken,
+        googleExpiration: googleExpiration,
+        googleTimeRemaining: googleTimeRemaining,
+        firebaseExpiration: firebaseExpiration,
+        firebaseTimeRemaining: firebaseTimeRemaining,
       );
     } catch (_) {
-      return const _Tokens();
+      return const _TokenInfo();
     }
   }
 
@@ -343,8 +520,20 @@ class AuthenticatedPage extends StatelessWidget {
   }
 }
 
-class _Tokens {
-  const _Tokens({this.googleIdToken, this.firebaseIdToken});
+class _TokenInfo {
+  const _TokenInfo({
+    this.googleIdToken,
+    this.firebaseIdToken,
+    this.googleExpiration,
+    this.googleTimeRemaining,
+    this.firebaseExpiration,
+    this.firebaseTimeRemaining,
+  });
+
   final String? googleIdToken;
   final String? firebaseIdToken;
+  final DateTime? googleExpiration;
+  final Duration? googleTimeRemaining;
+  final DateTime? firebaseExpiration;
+  final Duration? firebaseTimeRemaining;
 }
