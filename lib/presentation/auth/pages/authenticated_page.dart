@@ -228,9 +228,15 @@ class AuthenticatedPage extends StatelessWidget {
                       ),
 
                     const SizedBox(height: 20),
-                    FutureBuilder<_Tokens>(
-                      future: _loadTokens(),
-                      builder: (context, snapshot) {
+                    BlocBuilder<AuthBloc, AuthState>(
+                      buildWhen: (previous, current) =>
+                          previous.tokensRefreshTimestamp !=
+                          current.tokensRefreshTimestamp ||
+                          previous.isBusy != current.isBusy,
+                      builder: (context, state) {
+                        return FutureBuilder<_Tokens>(
+                          future: _loadTokens(),
+                          builder: (context, snapshot) {
                         final _Tokens tokens = snapshot.data ?? const _Tokens();
                         if (isNarrow) {
                           return Column(
@@ -283,6 +289,8 @@ class AuthenticatedPage extends StatelessWidget {
                               ),
                             ),
                           ],
+                        );
+                        },
                         );
                       },
                     ),
