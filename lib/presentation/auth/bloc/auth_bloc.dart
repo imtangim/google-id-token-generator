@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../../domain/auth/auth_repository.dart';
 
@@ -44,7 +45,9 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     emit(state.copyWith(isBusy: true, errorMessage: null));
     try {
       await _repository.signInWithGoogle();
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('Sign-in error: $e');
+      debugPrint('Stack trace: $stackTrace');
       emit(state.copyWith(isBusy: false, errorMessage: e.toString()));
       return;
     }

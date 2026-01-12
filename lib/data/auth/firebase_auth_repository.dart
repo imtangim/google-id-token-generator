@@ -29,15 +29,25 @@ class FirebaseAuthRepository implements AuthRepository {
         'This sample uses Google sign-in via web popup only.',
       );
     }
-    final googleProvider = GoogleAuthProvider();
-    final UserCredential cred = await _auth.signInWithPopup(googleProvider);
-    final OAuthCredential? oauth = cred.credential as OAuthCredential?;
-    final String? googleToken = oauth?.idToken;
-    final String? firebaseToken = await cred.user!.getIdToken();
-    await _persistTokens(
-      googleIdToken: googleToken,
-      firebaseIdToken: firebaseToken,
-    );
+    try {
+      debugPrint('Starting Google sign-in...');
+      final googleProvider = GoogleAuthProvider();
+      debugPrint('Calling signInWithPopup...');
+      final UserCredential cred = await _auth.signInWithPopup(googleProvider);
+      debugPrint('Sign-in successful, user: ${cred.user?.email}');
+      final OAuthCredential? oauth = cred.credential as OAuthCredential?;
+      final String? googleToken = oauth?.idToken;
+      final String? firebaseToken = await cred.user!.getIdToken();
+      await _persistTokens(
+        googleIdToken: googleToken,
+        firebaseIdToken: firebaseToken,
+      );
+      debugPrint('Tokens persisted successfully');
+    } catch (e, stackTrace) {
+      debugPrint('Error in signInWithGoogle: $e');
+      debugPrint('Stack trace: $stackTrace');
+      rethrow;
+    }
   }
 
   @override

@@ -14,8 +14,24 @@ class UnauthenticatedPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isBusy = context.watch<AuthBloc>().state.isBusy;
-    return Padding(
+    return BlocListener<AuthBloc, AuthState>(
+      listener: (context, state) {
+        if (state.errorMessage != null && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(state.errorMessage!),
+              backgroundColor: theme.colorScheme.error,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 5),
+              showCloseIcon: true,
+            ),
+          );
+        }
+      },
+      child: Builder(
+        builder: (context) {
+          final isBusy = context.watch<AuthBloc>().state.isBusy;
+          return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -86,6 +102,9 @@ class UnauthenticatedPage extends StatelessWidget {
           const SizedBox(height: 12),
           const AuthorCard(),
         ],
+      ),
+          );
+        },
       ),
     );
   }

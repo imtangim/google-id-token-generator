@@ -1,8 +1,9 @@
+import 'dart:convert';
+import 'dart:html' as html;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'package:id_token_generator/firebase_options.dart';
 import 'package:url_strategy/url_strategy.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:id_token_generator/data/auth/firebase_auth_repository.dart';
@@ -11,17 +12,137 @@ import 'package:id_token_generator/presentation/auth/bloc/auth_bloc.dart';
 import 'package:id_token_generator/presentation/auth/pages/unauthenticated_page.dart';
 import 'package:id_token_generator/presentation/auth/pages/authenticated_page.dart';
 import 'package:id_token_generator/presentation/settings/firebase_config_dialog.dart';
+import 'package:id_token_generator/presentation/settings/config_required_page.dart';
 import 'package:id_token_generator/core/constants.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+Future<bool> _hasFirebaseConfig() async {
+  if (!kIsWeb) return true; // Non-web platforms use default config
+  
+  try {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final String? raw = prefs.getString(AppPrefsKeys.firebaseWebConfig);
+    return raw != null && raw.trim().isNotEmpty;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<FirebaseOptions> _getFirebaseOptions() async {
+  if (!kIsWeb) {
+    throw UnsupportedError('This app requires Firebase configuration for web platform');
+  }
+  
+  // Load user-provided config from SharedPreferences
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+  final String? raw = prefs.getString(AppPrefsKeys.firebaseWebConfig);
+  
+  if (raw == null || raw.trim().isEmpty) {
+    throw StateError('Firebase configuration is required. Please configure Firebase settings first.');
+  }
+  
+  // Parse the JSON config
+  String text = raw.trim();
+  final int firstBrace = text.indexOf('{');
+  final int lastBrace = text.lastIndexOf('}');
+  if (firstBrace != -1 && lastBrace != -1 && lastBrace > firstBrace) {
+    text = text.substring(firstBrace, lastBrace + 1);
+  }
+  
+  final Map<String, dynamic> config = json.decode(text) as Map<String, dynamic>;
+  
+  // Validate required fields
+  final String? apiKey = config['apiKey'] as String?;
+  final String? appId = config['appId'] as String?;
+  final String? projectId = config['projectId'] as String?;
+  final String? messagingSenderId = config['messagingSenderId']?.toString();
+  
+  if (apiKey == null || appId == null || projectId == null || messagingSenderId == null || 
+      apiKey.isEmpty || appId.isEmpty || projectId.isEmpty || messagingSenderId.isEmpty) {
+    throw FormatException('Missing required Firebase config fields. Please configure all required fields.');
+  }
+  
+  // authDomain is required for authentication - generate from projectId if not provided
+  String? authDomain = config['authDomain'] as String?;
+  if (authDomain == null || authDomain.trim().isEmpty) {
+    authDomain = '$projectId.firebaseapp.com';
+    debugPrint('authDomain not provided, using default: $authDomain');
+  }
+  
+  // Create FirebaseOptions from user config
+  return FirebaseOptions(
+    apiKey: apiKey,
+    appId: appId,
+    messagingSenderId: messagingSenderId,
+    projectId: projectId,
+    authDomain: authDomain,
+    storageBucket: config['storageBucket'] as String?,
+    measurementId: config['measurementId'] as String?,
+  );
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   setPathUrlStrategy();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  
+  // Check if Firebase configuration exists (for web platform)
   if (kIsWeb) {
-    await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+    final bool hasConfig = await _hasFirebaseConfig();
+    if (!hasConfig) {
+      // Show configuration required screen without initializing Firebase
+      runApp(const ConfigRequiredApp());
+      return;
+    }
   }
-  runApp(const MyApp());
+  
+  // Initialize Firebase with user configuration
+  try {
+    final FirebaseOptions options = await _getFirebaseOptions();
+    await Firebase.initializeApp(options: options);
+    if (kIsWeb) {
+      await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+    }
+    runApp(const MyApp());
+  } catch (e) {
+    // If initialization fails, show configuration screen
+    debugPrint('Firebase initialization failed: $e');
+    if (kIsWeb) {
+      runApp(const ConfigRequiredApp());
+    } else {
+      rethrow;
+    }
+  }
+}
+
+class ConfigRequiredApp extends StatelessWidget {
+  const ConfigRequiredApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme lightScheme = ColorScheme.fromSeed(
+      seedColor: const Color.fromARGB(255, 87, 207, 66),
+      brightness: Brightness.light,
+    );
+    final ColorScheme darkScheme = ColorScheme.fromSeed(
+      seedColor: const Color.fromARGB(255, 87, 207, 66),
+      brightness: Brightness.dark,
+    );
+    return MaterialApp(
+      title: 'ID Token Generator',
+      themeMode: ThemeMode.system,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: lightScheme,
+        scaffoldBackgroundColor: lightScheme.surface,
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: darkScheme,
+        scaffoldBackgroundColor: darkScheme.surface,
+      ),
+      home: const ConfigRequiredPage(),
+    );
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -179,14 +300,9 @@ class _RootPageState extends State<RootPage> {
     setState(() {
       _hasConfig = false;
     });
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Configuration cleared. Using default.'),
-          behavior: SnackBarBehavior.floating,
-          showCloseIcon: true,
-        ),
-      );
+    // Automatically reload the page
+    if (kIsWeb) {
+      html.window.location.reload();
     }
   }
 
